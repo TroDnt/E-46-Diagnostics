@@ -18,7 +18,8 @@ class MainActivity : Activity() {
  private lateinit var count: TextView
  private val handler=Handler(Looper.getMainLooper())
  private var active=false
- private val poll=object:Runnable { override fun run(){ if(active && ready && !busy.get()) task { sample() }; if(active) handler.postDelayed(this,500) } }
+ @Volatile private var pollingEnabled=true
+ private val poll=object:Runnable { override fun run(){ if(active && pollingEnabled && ready && !busy.get()) task { sample() }; if(active) handler.postDelayed(this,500) } }
  private lateinit var faults: TextView
  @Volatile private var live = false
  @Volatile private var ready = false
@@ -45,8 +46,8 @@ class MainActivity : Activity() {
  for((left,right) in pairs){val row=LinearLayout(this);dash.addView(row);for(key in listOf(left,right)){val tile=panel().apply{setPadding(dp(8),dp(8),dp(8),dp(8));background=android.graphics.drawable.GradientDrawable().apply{setColor(0xff203040.toInt());cornerRadius=dp(14).toFloat()}};row.addView(tile,LinearLayout.LayoutParams(0,-2,1f).apply{setMargins(dp(4),dp(4),dp(4),dp(4))});if(key.isNotEmpty()){tile.addView(label(key,13f,0xffaab9cb.toInt()));val v=label("—",25f,0xff80baff.toInt());tile.addView(v);tiles[key]=v}else tile.visibility=android.view.View.INVISIBLE}}
  count=label("Ошибки: ещё не прочитаны",18f);dash.addView(count)
  faults=label("Ещё не прочитаны",17f);errors.addView(faults)
- button(errors,"Прочитать ошибки"){task{requireReady();decodeErrors(cmd("03"))}}
- button(errors,"Сброс ошибок двигателя"){AlertDialog.Builder(this).setTitle("Сброс OBD-II").setMessage("Заглушите мотор, оставьте зажигание включённым. Будут удалены ошибки, стоп-кадры и готовность экологических тестов.").setNegativeButton("Отмена",null).setPositiveButton("Сбросить"){_,_->task{requireReady();val rpm=pid("0C");check(rpm!=null && rpm.size>=2 && rpm[0]==0 && rpm[1]==0){"ЭБУ показывает работающий двигатель или не отвечает. Заглушите двигатель, оставьте зажигание включённым и повторите."};append("Отправляю OBD Mode 04");val response=cmd("04");check(Regex("(?m)^\\s*44(?:\\s|$)").containsMatchIn(response)){"ЭБУ не подтвердил сброс"};runOnUiThread{Toast.makeText(this,"ЭБУ подтвердил сброс",Toast.LENGTH_LONG).show()};decodeErrors(cmd("03"))}}.show()}
+ button(errors,"Прочитать ошибки"){pollingEnabled=false;task(true){requireReady();decodeErrors(cmd("03"))}}
+ button(errors,"Сброс ошибок двигателя"){pollingEnabled=false;AlertDialog.Builder(this).setTitle("Сброс OBD-II").setMessage("Заглушите мотор, оставьте зажигание включённым. Будут удалены ошибки, стоп-кадры и готовность экологических тестов.").setNegativeButton("Отмена",null).setPositiveButton("Сбросить"){_,_->pollingEnabled=false;task(true){requireReady();val rpm=pid("0C");check(rpm!=null && rpm.size>=2 && rpm[0]==0 && rpm[1]==0){"ЭБУ показывает работающий двигатель или не отвечает. Заглушите двигатель, оставьте зажигание включённым и повторите."};append("Отправляю OBD Mode 04");val response=cmd("04");check(Regex("(?m)^\\s*44(?:\\s|$)").containsMatchIn(response)){"ЭБУ не подтвердил сброс"};runOnUiThread{Toast.makeText(this,"ЭБУ подтвердил сброс",Toast.LENGTH_LONG).show()};decodeErrors(cmd("03"))}}.show()}
  blocks.addView(label("Модули BMW E46",22f));blocks.addView(label("DME: связь подтверждена по ISO 9141-2.\nASC/ABS, SRS, IHKA, LCM и KOMBI: протокол и доступ пока не подтверждены. Обычный ELM327 может не поддерживать адресный обмен BMW.\n\nНиже только безопасная проверка возможностей адаптера. Это НЕ сканирование ошибок других блоков."));button(blocks,"Проверить интерфейс K-Line"){task{check(socket!=null){"Подключите адаптер"};val responses=mutableListOf<String>();for(c in listOf("ATI","ATDP","ATDPN","ATKW","ATIGN")){responses.add(c+": "+cmd(c).replace("\r"," ").replace("\n"," "))};append("Проверка интерфейса завершена");runOnUiThread{AlertDialog.Builder(this).setTitle("Результат проверки K-Line").setMessage(responses.joinToString("\n")+"\n\nЭто сведения об адаптере, а не подтверждение связи с ABS/SRS.").setPositiveButton("ОК",null).show()}}}
  button(settings,"Выбрать другой адаптер"){choose(false)}
  button(settings,"Отключиться"){ready=false;try{socket?.close()}catch(_:Exception){};socket=null;status.text="Не подключено";tiles.values.forEach{it.text="—"}}
@@ -54,13 +55,13 @@ class MainActivity : Activity() {
  button(settings,"Сохранить журнал"){startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="text/plain";putExtra(Intent.EXTRA_TITLE,"e46-log.txt")},22)}
  log=label("",12f);log.setTextIsSelectable(true);settings.addView(log)
  val nav=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;setPadding(0,dp(8),0,dp(8))};root.addView(nav)
- listOf("Приборы","Ошибки","Блоки","Настройки").forEachIndexed{i,t->nav.addView(Button(this).apply{text=t;isAllCaps=false;textSize=10f;minHeight=dp(52);minimumHeight=dp(52);setPadding(dp(1),dp(4),dp(1),dp(4));setTextColor(-1);backgroundTintList=android.content.res.ColorStateList.valueOf(0xff24578a.toInt());setOnClickListener{screens.forEachIndexed{j,v->v.visibility=if(i==j)android.view.View.VISIBLE else android.view.View.GONE};if(i==3)log.text=journal.toString();scroll.scrollTo(0,0)}},LinearLayout.LayoutParams(0,-2,1f))}
+ listOf("Приборы","Ошибки","Блоки","Настройки").forEachIndexed{i,t->nav.addView(Button(this).apply{text=t;isAllCaps=false;textSize=10f;minHeight=dp(52);minimumHeight=dp(52);setPadding(dp(1),dp(4),dp(1),dp(4));setTextColor(-1);backgroundTintList=android.content.res.ColorStateList.valueOf(0xff24578a.toInt());setOnClickListener{pollingEnabled=(i==0);screens.forEachIndexed{j,v->v.visibility=if(i==j)android.view.View.VISIBLE else android.view.View.GONE};if(i==3)log.text=journal.toString();scroll.scrollTo(0,0)}},LinearLayout.LayoutParams(0,-2,1f))}
  if(getPreferences(0).contains("adapter")) choose()
  }
  override fun onStart(){super.onStart();active=true;handler.post(poll)}
  override fun onStop(){active=false;handler.removeCallbacks(poll);super.onStop()}
  private fun append(s:String) { runOnUiThread { journal.append(s).append('\n'); if(journal.length>120000) journal.delete(0,journal.length-100000); if(log.isShown) log.text=journal.toString() } }
- private fun task(action:()->Unit){if(!busy.compareAndSet(false,true))return;worker.execute{try{action()}catch(e:Exception){append("Ошибка: "+e.message);runOnUiThread{Toast.makeText(this,e.message ?: "Ошибка связи",Toast.LENGTH_LONG).show();if(!ready)status.text="Нет связи"}}finally{busy.set(false)}}}
+ private fun task(priority:Boolean=false,action:()->Unit){if(!priority && !busy.compareAndSet(false,true))return;worker.execute{busy.set(true);try{action()}catch(e:Exception){append("Ошибка: "+e.message);runOnUiThread{Toast.makeText(this,e.message ?: "Ошибка связи",Toast.LENGTH_LONG).show();if(!ready)status.text="Нет связи"}}finally{busy.set(false)}}}
  private fun choose(useSaved:Boolean=true){
  if(Build.VERSION.SDK_INT>=31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)!=PackageManager.PERMISSION_GRANTED){requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT),11);return}
  try{val adapter=getSystemService(BluetoothManager::class.java).adapter;check(adapter!=null && adapter.isEnabled){"Включите Bluetooth"};val devices=adapter.bondedDevices.toList();check(devices.isNotEmpty()){"Сначала сопрягите ELM327 в настройках Bluetooth"}
